@@ -27,35 +27,60 @@ export function joinedLabel(trip: Trip): string {
   return planned ? `참여 ${joined}/${planned}명` : `참여 ${joined}명`;
 }
 
-/** 방 상태로 각 단계의 진행 여부를 계산한다 */
+/** 취향을 입력했는지 (예전 데이터는 입력 시각이 없어서 남긴 취향이 있으면 입력한 것으로 본다) */
+export const hasPrefs = (p: Trip["participants"][number]) =>
+  !!p.prefs_saved_at || !!p.drinking || p.allergies.length + p.dislikes.length + p.preferred_tags.length > 0;
+
+/**
+ * 방 상태로 각 단계의 진행 여부를 계산한다.
+ * - 조건 입력: 여행 조건은 방에 하나라 누가 저장하든 완료
+ * - 친구·취향: 정한 인원이 다 모이고(미정이면 2명 이상) 모두 자기 취향을 입력했을 때
+ * - AI 일정: 1안·2안이 생성됐을 때
+ * - 함께 투표: 모든 참여자가 한 곳 이상 투표했을 때 (확정하면 완료로 봄)
+ * - 일정 확정: 참여자 모두가 같은 안에 '확정 동의'를 눌렀을 때
+ */
 export function stepsOf(trip: Trip): Step[] {
   const hasSpec = !!trip.spec;
-  // 정한 인원이 다 모이면 완료, 인원 미정이면 친구가 1명 이상 들어오면 완료
+  const people = trip.participants;
   const planned = plannedHeadcount(trip);
-  const invited = planned ? trip.participants.length >= planned : trip.participants.length >= 2;
+  const enough = planned ? people.length >= planned : people.length >= 2;
+  const prefsDone = people.filter(hasPrefs).length;
   const generated = trip.plans.length > 0;
-  const items = trip.plans.flatMap((p) => p.days.flatMap((d) => d.items));
-  const discussed = items.some((i) => Object.keys(i.votes).length > 0 || i.comments.length > 0 || i.history.length > 0);
+  const confirmed = !!trip.confirmed_plan_id;
+  const voters = new Set(trip.plans.flatMap((p) => p.days.flatMap((d) => d.items.flatMap((i) => Object.keys(i.votes)))));
+  const voted = people.filter((p) => voters.has(p.id)).length;
+  const confirmedPlan = trip.plans.find((p) => p.id === trip.confirmed_plan_id);
 
   const raw: Omit<Step, "state">[] = [
     { title: "조건 입력", hint: "지역·날짜·테마를 정해요", tab: "spec" },
-    { title: "친구 초대", hint: planned ? `${trip.participants.length}/${planned}명 참여했어요` : "링크로 친구 취향을 모아요", tab: "people" },
+    {
+      title: "친구·취향",
+      hint: `참여 ${people.length}${planned ? `/${planned}` : ""}명 · 취향 입력 ${prefsDone}/${people.length}명`,
+      tab: "people",
+    },
     { title: "AI 일정", hint: "1안·2안을 받아봐요", tab: "plan" },
-    { title: "투표·수정", hint: "좋아요·코멘트로 함께 다듬어요", tab: "plan" },
-    { title: "확정·공유", hint: "슬라이드·엑셀로 공유해요", tab: "plan" },
+    { title: "함께 투표", hint: `투표 참여 ${voted}/${people.length}명`, tab: "plan" },
+    {
+      title: "일정 확정",
+      hint: confirmedPlan
+        ? `모두 동의해 ${confirmedPlan.label}으로 확정했어요`
+        : `확정 동의 ${Object.keys(trip.confirm_votes ?? {}).length}/${people.length}명`,
+      tab: "plan",
+    },
   ];
-  const done = [hasSpec, invited, generated, discussed, false];
-  // 지금 할 단계: 앞에서부터 처음으로 끝나지 않은 단계 (친구 초대는 건너뛰고 진행할 수 있다)
-  let current = done.findIndex((d, i) => !d && !(i === 1 && generated));
-  if (current === -1) current = raw.length - 1;
+  const done = [hasSpec, enough && prefsDone === people.length, generated, confirmed || (people.length > 0 && voted === people.length), confirmed];
+  // 지금 할 단계: 앞에서부터 처음으로 끝나지 않은 단계 (친구·취향은 일정이 나온 뒤엔 건너뛰고 진행할 수 있다)
+  const current = done.findIndex((d, i) => !d && !(i === 1 && generated));
   return raw.map((s, i) => ({ ...s, state: done[i] ? "done" : i === current ? "current" : "todo" }));
 }
 
-/** 지금 단계 라벨: "2/5 친구 초대" */
-export function currentStepLabel(trip: Trip): { label: string; index: number; total: number } {
+/** 지금 단계 라벨: "2/5 친구·취향" (모두 끝났으면 마지막 단계) */
+export function currentStepLabel(trip: Trip): { label: string; index: number; total: number; allDone: boolean } {
   const steps = stepsOf(trip);
-  const index = Math.max(0, steps.findIndex((s) => s.state === "current"));
-  return { label: `${index + 1}/${steps.length} ${steps[index].title}`, index, total: steps.length };
+  const found = steps.findIndex((s) => s.state === "current");
+  const allDone = found === -1 && steps.every((s) => s.state === "done");
+  const index = found === -1 ? (allDone ? steps.length - 1 : steps.findIndex((s) => s.state !== "done")) : found;
+  return { label: `${index + 1}/${steps.length} ${steps[index].title}`, index, total: steps.length, allDone };
 }
 
 /**
@@ -64,18 +89,23 @@ export function currentStepLabel(trip: Trip): { label: string; index: number; to
  */
 export function TripSteps({ trip, onGo, className }: { trip: Trip; onGo: (tab: Tab) => void; className?: string }) {
   const steps = stepsOf(trip);
-  const index = Math.max(0, steps.findIndex((s) => s.state === "current"));
+  const { index, allDone } = currentStepLabel(trip);
   const current = steps[index];
 
   return (
     <div className={cn("flex flex-col gap-5 rounded-[1.75rem] bg-ink-50 p-5 lg:flex-row lg:items-center lg:gap-10 lg:p-6", className)}>
       <button type="button" onClick={() => onGo(current.tab)} className="group flex items-center gap-3 text-left lg:w-72 lg:shrink-0">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-ink-900 text-sm font-bold text-white">
-          {index + 1}
+        <span
+          className={cn(
+            "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-bold text-white",
+            allDone ? "bg-mint-500" : "bg-ink-900"
+          )}
+        >
+          {allDone ? <Check className="h-4 w-4" /> : index + 1}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-xs font-semibold text-ink-500">지금 할 일</span>
-          <span className="block truncate font-bold">{current.title}</span>
+          <span className="block text-xs font-semibold text-ink-500">{allDone ? "준비 완료" : "지금 할 일"}</span>
+          <span className="block truncate font-bold">{allDone ? "일정이 확정됐어요" : current.title}</span>
           <span className="block truncate text-xs text-ink-500">{current.hint}</span>
         </span>
         <ArrowRight className="h-3.5 w-3.5 shrink-0 text-ink-400 transition-transform group-hover:translate-x-0.5" />

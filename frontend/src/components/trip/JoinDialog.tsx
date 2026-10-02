@@ -26,13 +26,17 @@ import {
 import { Avatar } from "@/components/trip/people";
 import { api, ApiError } from "@/lib/api";
 import { toast, useSessionStore, useTripStore } from "@/lib/store";
-import type { Participant } from "@/lib/types";
+import { DRINK_TYPES, DRINKING, type Participant } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const prefsSchema = {
   allergies: z.array(z.string()).max(20),
   dislikes: z.array(z.string()).max(20),
   preferred_tags: z.array(z.string()).max(20),
+  drinking: z.enum(DRINKING).nullable(),
+  drink_types: z.array(z.string()).max(20),
 };
+const EMPTY_PREFS = { allergies: [], dislikes: [], preferred_tags: [], drinking: null, drink_types: [] };
 
 const joinSchema = z.object({
   nickname: z.string().trim().min(1, "닉네임을 입력해 주세요.").max(12, "12자 이내로 입력해 주세요."),
@@ -78,6 +82,7 @@ function PreferenceFields({
           )}
         />
       </div>
+      <DrinkingFields control={control} />
       <div className="space-y-2">
         <Label>좋아하는 것</Label>
         <Controller
@@ -98,6 +103,80 @@ function PreferenceFields({
   );
 }
 
+const DRINK_HINT: Record<(typeof DRINKING)[number], string> = {
+  "안 마셔요": "술집은 빼고 짜요",
+  "가볍게 한두 잔": "저녁에 곁들이는 정도",
+  "술자리 좋아요": "저녁 술자리를 넣어요",
+};
+
+/** 음주 여부 + 좋아하는 주종 (일정의 저녁 술자리·운전자 배려에 쓰인다) */
+function DrinkingFields({
+  control,
+}: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  control: any;
+}) {
+  return (
+    <Controller
+      control={control}
+      name="drinking"
+      render={({ field: drinking }) => (
+        <div className="space-y-2.5">
+          <Label>술은 어느 정도 마시나요?</Label>
+          <div className="grid grid-cols-3 gap-1.5">
+            {DRINKING.map((d) => {
+              const on = drinking.value === d;
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => drinking.onChange(on ? null : d)}
+                  className={cn(
+                    "flex flex-col items-center gap-0.5 rounded-2xl border-2 px-2 py-2.5 text-center transition-all",
+                    on ? "border-ink-900 bg-white" : "border-transparent bg-ink-50 hover:bg-ink-100"
+                  )}
+                >
+                  <span className="text-sm font-semibold">{d}</span>
+                  <span className="text-[0.6875rem] text-ink-400">{DRINK_HINT[d]}</span>
+                </button>
+              );
+            })}
+          </div>
+          {drinking.value && drinking.value !== "안 마셔요" && (
+            <Controller
+              control={control}
+              name="drink_types"
+              render={({ field }) => (
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  <span className="w-full text-xs text-ink-500">좋아하는 술 (여러 개 선택)</span>
+                  {DRINK_TYPES.map((t) => {
+                    const on = field.value.includes(t);
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => field.onChange(on ? field.value.filter((x: string) => x !== t) : [...field.value, t])}
+                        className={cn(
+                          "h-8 rounded-full px-3 text-xs font-semibold transition-colors",
+                          on ? "bg-ink-900 text-white" : "bg-ink-100 text-ink-600 hover:bg-ink-200"
+                        )}
+                      >
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            />
+          )}
+        </div>
+      )}
+    />
+  );
+}
+
 /** 링크로 들어온 사용자가 닉네임 + 6자리 PIN 으로 참여(또는 재입장)하는 모달 */
 export function JoinDialog({ tripId, open }: { tripId: string; open: boolean }) {
   const setSession = useSessionStore((s) => s.setSession);
@@ -106,7 +185,7 @@ export function JoinDialog({ tripId, open }: { tripId: string; open: boolean }) 
 
   const form = useForm<JoinValues>({
     resolver: zodResolver(joinSchema),
-    defaultValues: { nickname: "", pin: "", allergies: [], dislikes: [], preferred_tags: [] },
+    defaultValues: { nickname: "", pin: "", ...EMPTY_PREFS },
   });
   // 이미 참여자가 있으면 "프로필 선택" 화면부터 보여준다.
   const [mode, setMode] = React.useState<"pick" | "new">("new");
@@ -123,19 +202,19 @@ export function JoinDialog({ tripId, open }: { tripId: string; open: boolean }) 
 
   const pickProfile = (p: Participant) => {
     setSelected(p);
-    form.reset({ nickname: p.nickname, pin: "", allergies: [], dislikes: [], preferred_tags: [] });
+    form.reset({ nickname: p.nickname, pin: "", ...EMPTY_PREFS });
   };
 
   const startNew = () => {
     setSelected(null);
     setMode("new");
-    form.reset({ nickname: "", pin: "", allergies: [], dislikes: [], preferred_tags: [] });
+    form.reset({ nickname: "", pin: "", ...EMPTY_PREFS });
   };
 
   const backToList = () => {
     setSelected(null);
     setMode("pick");
-    form.reset({ nickname: "", pin: "", allergies: [], dislikes: [], preferred_tags: [] });
+    form.reset({ nickname: "", pin: "", ...EMPTY_PREFS });
   };
 
   const onSubmit = form.handleSubmit(async (values) => {
@@ -292,7 +371,13 @@ export function PreferencesDialog({
   const tripId = useTripStore((s) => s.trip?.id);
   const form = useForm<EditValues>({
     resolver: zodResolver(editSchema),
-    values: { allergies: me.allergies, dislikes: me.dislikes, preferred_tags: me.preferred_tags },
+    values: {
+      allergies: me.allergies,
+      dislikes: me.dislikes,
+      preferred_tags: me.preferred_tags,
+      drinking: me.drinking ?? null,
+      drink_types: me.drink_types ?? [],
+    },
   });
 
   const onSubmit = form.handleSubmit(async (values) => {
@@ -305,7 +390,7 @@ export function PreferencesDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{me.nickname}님의 음식 취향</DialogTitle>
+          <DialogTitle>{me.nickname}님의 취향</DialogTitle>
           <DialogDescription>AI가 일정을 만들 때 모든 참여자의 취향을 함께 고려해요.</DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="space-y-5">

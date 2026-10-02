@@ -3,23 +3,20 @@
 import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 import { Shell } from "@/components/layout/Shell";
 import { AuthorStory } from "@/components/explore/cards";
-import { BookmarkList } from "@/components/explore/BookmarkList";
 import { Toaster } from "@/components/trip/Toaster";
 import { currentStepLabel, stepsOf } from "@/components/trip/TripSteps";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Bookmark, Bus, CalendarCheck, Car, Footprints, Loader2, MapIcon, Plus, Users } from "@/components/ui/icons";
+import { Bus, CalendarCheck, Car, Check, Footprints, Loader2, MapIcon, Plus, Users } from "@/components/ui/icons";
 import { api, ApiError } from "@/lib/api";
 import { REGIONS, regionPillTone } from "@/lib/explore";
 import { timeAgo, tripDDay } from "@/lib/format";
-import { toast, useBookmarkStore, useSessionStore } from "@/lib/store";
+import { toast, useSessionStore } from "@/lib/store";
 import type { Trip } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-type Tab = "trips" | "bookmarks";
 
 const TRANSPORT_ICON = { 자차: Car, 대중교통: Bus, "도보 위주": Footprints } as const;
 const FALLBACK_TONES = [
@@ -218,22 +215,12 @@ function MyTrips({ trips, sessions }: ReturnType<typeof useMyTrips>) {
 }
 
 function MyPageInner() {
-  const params = useSearchParams();
-  const router = useRouter();
-  const tab: Tab = params.get("tab") === "bookmarks" ? "bookmarks" : "trips";
   const my = useMyTrips();
-  const bookmarkCount = useBookmarkStore((s) => s.ids.length);
-  const [mounted, setMounted] = React.useState(false);
-  React.useEffect(() => setMounted(true), []);
-
-  const go = (t: Tab) => router.replace(t === "trips" ? "/my" : "/my?tab=bookmarks", { scroll: false });
-  const tripCount = my.trips?.length;
-  const upcoming = my.trips?.filter((t) => tripDDay(t.spec)?.label.startsWith("D-")).length;
-
+  const trips = my.trips;
   const stats = [
-    { key: "trips" as const, label: "참여한 여행", value: tripCount, icon: Users, tone: "bg-lilac-100 text-lilac-600" },
-    { key: "trips" as const, label: "다가오는 여행", value: upcoming, icon: CalendarCheck, tone: "bg-peach-100 text-peach-600" },
-    { key: "bookmarks" as const, label: "북마크", value: mounted ? bookmarkCount : undefined, icon: Bookmark, tone: "bg-sky-100 text-sky-600" },
+    { label: "참여한 여행", value: trips?.length, icon: Users, tone: "bg-lilac-100 text-lilac-600" },
+    { label: "다가오는 여행", value: trips?.filter((t) => tripDDay(t.spec)?.label.startsWith("D-")).length, icon: CalendarCheck, tone: "bg-peach-100 text-peach-600" },
+    { label: "확정한 일정", value: trips?.filter((t) => t.confirmed_plan_id).length, icon: Check, tone: "bg-mint-100 text-mint-600" },
   ];
 
   return (
@@ -241,17 +228,15 @@ function MyPageInner() {
       <header className="space-y-6 text-center">
         <div className="space-y-2">
           <h1 className="text-[1.75rem] font-bold tracking-tight sm:text-4xl">내 여행</h1>
-          <p className="text-sm text-ink-500 sm:text-base">이 기기에서 참여한 여행과 북마크한 계획을 모아 봤어요.</p>
+          <p className="text-sm text-ink-500 sm:text-base">이 기기에서 참여한 여행을 모아 봤어요.</p>
         </div>
 
         {/* 한눈에 보기 */}
         <div className="mx-auto grid max-w-2xl grid-cols-3 gap-2 sm:gap-3">
-          {stats.map(({ key, label, value, icon: Icon, tone }) => (
-            <button
+          {stats.map(({ label, value, icon: Icon, tone }) => (
+            <div
               key={label}
-              type="button"
-              onClick={() => go(key)}
-              className="flex flex-col items-center gap-2 rounded-3xl bg-ink-50 px-2 py-4 transition-colors hover:bg-ink-100 sm:flex-row sm:gap-3 sm:px-4 sm:text-left"
+              className="flex flex-col items-center gap-2 rounded-3xl bg-ink-50 px-2 py-4 sm:flex-row sm:gap-3 sm:px-4 sm:text-left"
             >
               <span className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl", tone)}>
                 <Icon className="h-4 w-4" />
@@ -260,46 +245,21 @@ function MyPageInner() {
                 <span className="block text-xs text-ink-500">{label}</span>
                 <span className="block text-xl font-bold tabular-nums">{value ?? "–"}</span>
               </span>
-            </button>
-          ))}
-        </div>
-
-        {/* 탭 (둘러보기의 국내/해외 탭과 같은 모양) */}
-        <div className="mx-auto flex w-max gap-1 rounded-full bg-ink-100 p-1">
-          {(
-            [
-              ["trips", "내 여행", tripCount],
-              ["bookmarks", "북마크", mounted ? bookmarkCount : undefined],
-            ] as const
-          ).map(([key, label, count]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => go(key)}
-              className={cn(
-                "inline-flex h-9 items-center gap-1.5 rounded-full px-5 text-sm font-semibold transition-all",
-                tab === key ? "bg-ink-900 text-white shadow-soft" : "text-ink-500 hover:text-ink-900"
-              )}
-            >
-              {label}
-              {count !== undefined && <span className={cn("text-xs", tab === key ? "text-white/60" : "text-ink-400")}>{count}</span>}
-            </button>
+            </div>
           ))}
         </div>
       </header>
 
-      {tab === "trips" ? <MyTrips {...my} /> : <BookmarkList />}
+      <MyTrips {...my} />
     </div>
   );
 }
 
-/** 내 여행 + 북마크 (로그인 없이 이 기기에 저장된 정보 기준) */
+/** 내 여행 (로그인 없이 이 기기에 저장된 참여 정보 기준). 북마크는 상단 '북마크' 메뉴에서 */
 export default function MyPage() {
   return (
     <Shell backHref="/" title="내 여행">
-      <React.Suspense fallback={null}>
-        <MyPageInner />
-      </React.Suspense>
+      <MyPageInner />
       <Toaster />
     </Shell>
   );

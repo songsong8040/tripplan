@@ -28,7 +28,22 @@ Theme = Literal[
     "자연 경관",
     "역사 탐방",
     "야경/나이트라이프",
+    "실내 액티비티",
+    "체험/클래스",
+    "테마파크",
+    "바다/해변",
+    "등산/트레킹",
+    "스파/온천",
+    "공연/축제",
+    "사진 명소",
+    "로컬 시장",
+    "드라이브",
+    "아이와 함께",
+    "반려동물 동반",
 ]
+Drinking = Literal["안 마셔요", "가볍게 한두 잔", "술자리 좋아요"]
+DRINK_TYPES = ["소주", "맥주", "와인", "막걸리·전통주", "하이볼·칵테일", "위스키", "사케"]
+Cuisine = Literal["한식", "중식", "일식", "양식", "아시아음식", "분식", "패스트푸드", "치킨", "뷔페", "술집"]
 AgeGroup = Literal["영유아", "10대", "20대", "30대", "40대", "50대", "60대 이상"]
 GenderMix = Literal["남성만", "여성만", "혼성", "미정"]
 Category = Literal["식당", "카페", "관광지", "액티비티", "쇼핑", "숙소", "문화/전시", "휴식", "이동", "기타"]
@@ -58,6 +73,16 @@ class Lodging(StrictModel):
     nights: list[Annotated[int, Field(ge=1, le=30)]] = Field(default_factory=list)
 
 
+class MustVisitPlace(StrictModel):
+    name: str = Field(..., min_length=1, max_length=60)
+    address: str = ""
+    place_url: str = ""
+    lat: float | None = None
+    lng: float | None = None
+    day: int | None = Field(None, ge=1, le=31, description="몇 일차 (None = 아무 날)")
+    slot: Literal["", "오전", "점심", "오후", "저녁"] = ""
+
+
 class TripSpec(StrictModel):
     title: str = Field("", max_length=60)
     region: str = Field(..., min_length=1, max_length=60)
@@ -76,7 +101,13 @@ class TripSpec(StrictModel):
     budget_level: Literal["알뜰", "보통", "여유"] = "보통"
     transport: Literal["대중교통", "자차", "도보 위주", "미정"] = "미정"
     max_travel_minutes: int = Field(30, ge=5, le=180, description="연속한 두 장소 사이 최대 이동 시간(분)")
+    # 대중교통·미정 여행에서 걸어서 이동할 수 있는 최대 시간(분). 도보 위주면 max_travel_minutes 가 곧 도보 한도
+    max_walk_minutes: int = Field(15, ge=5, le=60)
     lodgings: list[Lodging] = Field(default_factory=list, max_length=15)
+    # 꼭 가야 하는 곳 (조건 화면에서 직접 고른 장소)
+    must_visits: list["MustVisitPlace"] = Field(default_factory=list, max_length=15)
+    # 체크를 푼(빼 달라는) 음식 종류. 비어 있으면 모든 음식 가능
+    excluded_cuisines: list[Cuisine] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -118,6 +149,27 @@ class ParticipantPreference(StrictModel):
     allergies: list[str] = Field(default_factory=list)
     dislikes: list[str] = Field(default_factory=list)
     preferred_tags: list[str] = Field(default_factory=list)
+    drinking: Drinking | None = None
+    drink_types: list[str] = Field(default_factory=list)
+
+
+class MustVisit(BaseModel):
+    name: str = Field(description="사용자가 꼭 가겠다고 한 장소의 상호명(사용자가 쓴 그대로, 지점명 포함)")
+    day: int | None = Field(None, description="몇 일차에 가는지 (모르면 null)")
+    slot: str = Field("", description="'점심' | '저녁' | '아침' | '오전' | '오후' | '' 중 하나")
+
+
+class DayArea(BaseModel):
+    day: int
+    area: str = Field(description="그날 주로 노는 지역 이름 (예: 하남, 잠실)")
+
+
+class NoteRequirements(BaseModel):
+    """'AI에게 추가로 요청할 점'을 구조화한 결과"""
+
+    must_visit: list[MustVisit] = Field(default_factory=list, description="이름이 나온 특정 장소만. '카페', '고기집' 같은 일반 명사는 넣지 않음")
+    day_areas: list[DayArea] = Field(default_factory=list)
+    rules: list[str] = Field(default_factory=list, description="일정이 지켜야 할 규칙을 짧은 명령문으로 (예: '1일차 점심은 한식 제외')")
 
 
 class TravelRequest(StrictModel):
@@ -214,6 +266,8 @@ class PlanItem(BaseModel):
     id: str
     name: str
     category: Category = "기타"
+    # 카카오 업종 분류 전체 경로 (예: '음식점 > 한식 > 국수'). 음식 종류 제외 검사에 쓴다
+    kakao_category: str = ""
     start_time: str = ""
     duration_minutes: int = 60
     reason: str = ""
@@ -276,8 +330,12 @@ class ParticipantRecord(BaseModel):
     allergies: list[str] = Field(default_factory=list)
     dislikes: list[str] = Field(default_factory=list)
     preferred_tags: list[str] = Field(default_factory=list)
+    drinking: Drinking | None = None
+    drink_types: list[str] = Field(default_factory=list)
     joined_at: str
     color: str
+    # 취향을 직접 입력(또는 '없음'으로 확인)한 시각. 단계 표시에서 "취향 모으기" 판단에 쓴다
+    prefs_saved_at: str | None = None
     # 비공개 필드
     pin_salt: str
     pin_hash: str
@@ -297,6 +355,12 @@ class TripState(BaseModel):
     plan_source: Literal["gemini", "mock"] | None = None
     generated_at: str | None = None
     activity: list[ActivityLog] = Field(default_factory=list)
+    # 함께 확정한 안 (확정 전에는 None)
+    confirmed_plan_id: str | None = None
+    confirmed_at: str | None = None
+    confirmed_by: str | None = None
+    # 참여자별 확정 동의 (participant_id → plan_id). 모두 같은 안에 동의하면 확정된다
+    confirm_votes: dict[str, str] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -310,8 +374,11 @@ class ParticipantPublic(BaseModel):
     allergies: list[str]
     dislikes: list[str]
     preferred_tags: list[str]
+    drinking: Drinking | None = None
+    drink_types: list[str] = Field(default_factory=list)
     joined_at: str
     color: str
+    prefs_saved_at: str | None = None
 
 
 class TripPublic(BaseModel):
@@ -325,6 +392,10 @@ class TripPublic(BaseModel):
     plan_source: Literal["gemini", "mock"] | None
     generated_at: str | None
     activity: list[ActivityLog]
+    confirmed_plan_id: str | None = None
+    confirmed_at: str | None = None
+    confirmed_by: str | None = None
+    confirm_votes: dict[str, str] = Field(default_factory=dict)
 
 
 TagList = Annotated[list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20)]], Field(max_length=20)]
@@ -336,6 +407,8 @@ class JoinRequest(StrictModel):
     allergies: TagList = Field(default_factory=list)
     dislikes: TagList = Field(default_factory=list)
     preferred_tags: TagList = Field(default_factory=list)
+    drinking: Drinking | None = None
+    drink_types: TagList = Field(default_factory=list)
 
 
 class JoinResponse(BaseModel):
@@ -347,6 +420,8 @@ class PreferencesUpdate(StrictModel):
     allergies: TagList = Field(default_factory=list)
     dislikes: TagList = Field(default_factory=list)
     preferred_tags: TagList = Field(default_factory=list)
+    drinking: Drinking | None = None
+    drink_types: TagList = Field(default_factory=list)
 
 
 class ItemCreate(StrictModel):
@@ -364,6 +439,11 @@ class ItemPatch(StrictModel):
     duration_minutes: int | None = Field(None, ge=0, le=24 * 60)
     memo: str | None = Field(None, max_length=300)
     reason: str | None = Field(None, max_length=300)
+
+
+class ConfirmRequest(StrictModel):
+    # 내 확정 동의. None 이면 동의 취소
+    plan_id: str | None = None
 
 
 class ReorderRequest(StrictModel):

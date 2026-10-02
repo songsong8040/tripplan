@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import get_settings
-from .planner import PlannerError, generate_trip_plan, to_plan_options
+from .planner import PlannerError, generate_trip_plan, parse_notes, requirements_prompt, to_plan_options
 from .lodging import inject_lodging, lodging_prompt
 from .routing import LegResult, RouteRequest, route_legs
 from .place_verifier import (
@@ -26,6 +26,20 @@ from .place_verifier import (
     search_kakao_places,
     verify_items,
     verify_plans,
+    enforce_travel_limits,
+    ensure_must_visit,
+    excluded_cuisines,
+    fill_missing_meals,
+    replace_excluded_cuisines,
+    close_gaps,
+    cuisine_rules,
+    move_cafes_after_meals,
+    common_sense_fixes,
+    digest_before_dessert,
+    optimize_order,
+    prefer_walkable,
+    wants_indoor,
+    _core as core_name,
 )
 from .schemas import (
     Comment,
@@ -50,6 +64,7 @@ from .schemas import (
     TripSpec,
     TripState,
     VoteRequest,
+    ConfirmRequest,
 )
 from .security import hash_pin, hash_token, new_token, verify_pin
 from .store import TripNotFound, TripStore, log, new_id, now_iso
@@ -265,7 +280,11 @@ def join_trip(trip_id: str, body: JoinRequest, response: Response) -> JoinRespon
             allergies=body.allergies,
             dislikes=body.dislikes,
             preferred_tags=body.preferred_tags,
+            drinking=body.drinking,
+            drink_types=body.drink_types if body.drinking != "안 마셔요" else [],
             joined_at=now_iso(),
+            # 참여하면서 취향(음주 포함)을 하나라도 남겼으면 입력 완료로 본다
+            prefs_saved_at=now_iso() if (body.allergies or body.dislikes or body.preferred_tags or body.drinking) else None,
             color=PARTICIPANT_COLORS[len(trip.participants) % len(PARTICIPANT_COLORS)],
             pin_salt=salt,
             pin_hash=pin_hash,
@@ -273,6 +292,8 @@ def join_trip(trip_id: str, body: JoinRequest, response: Response) -> JoinRespon
         )
         trip.participants.append(participant)
         log(trip, participant.nickname, "여행에 참여했어요")
+        # 새 멤버는 아직 동의하지 않았으므로 확정이 풀린다
+        update_confirmation(trip)
         return participant, True
 
     try:
@@ -296,6 +317,10 @@ def get_me(trip_id: str, token: Token = None) -> ParticipantPublic:
 def update_preferences(trip_id: str, body: PreferencesUpdate, token: Token = None) -> TripPublic:
     def run(trip: TripState, me: ParticipantRecord):
         me.allergies, me.dislikes, me.preferred_tags = body.allergies, body.dislikes, body.preferred_tags
+        me.drinking = body.drinking
+        me.drink_types = body.drink_types if body.drinking != "안 마셔요" else []
+        # 비워서 저장해도 '특별히 없음'을 확인한 것으로 보고 입력 완료 처리
+        me.prefs_saved_at = now_iso()
         log(trip, me.nickname, "음식 취향을 수정했어요")
 
     trip, _ = mutate(trip_id, token, run)
@@ -333,7 +358,12 @@ def build_travel_request(trip: TripState) -> TravelRequest:
         spec=trip.spec,
         participants=[
             ParticipantPreference(
-                nickname=p.nickname, allergies=p.allergies, dislikes=p.dislikes, preferred_tags=p.preferred_tags
+                nickname=p.nickname,
+                allergies=p.allergies,
+                dislikes=p.dislikes,
+                preferred_tags=p.preferred_tags,
+                drinking=p.drinking,
+                drink_types=p.drink_types,
             )
             for p in trip.participants
         ],
@@ -356,16 +386,58 @@ async def generate_for_trip(trip_id: str, token: Token = None) -> TripPublic:
     trip = get_trip_or_404(trip_id)
     me = find_participant(trip, token)
     req = build_travel_request(trip)
+    # 추가 요청 메모를 '꼭 갈 곳 · 날짜별 지역 · 규칙'으로 정리해 최우선 조건으로 쓴다
+    reqs = await parse_notes(req.spec.notes)
     # 카카오 키가 있으면 실제 장소 후보를 먼저 모아 AI 가 그 안에서만 고르게 한다
-    candidates = await collect_candidates(req.spec) if settings.gemini_api_key else []
+    candidates = await collect_candidates(req.spec, reqs) if settings.gemini_api_key else []
+    requested = [c for c in candidates if c.requested]
     try:
-        result, source = await generate_trip_plan(req, candidates_prompt(candidates) + lodging_prompt(req.spec))
+        result, source = await generate_trip_plan(
+            req, candidates_prompt(candidates) + lodging_prompt(req.spec), priority=requirements_prompt(reqs, req.spec)
+        )
     except PlannerError as exc:
         raise HTTPException(exc.status_code, str(exc))
     plans = to_plan_options(result, req)
     if source == "gemini":
         await verify_plans(plans, req.spec.region, candidates)
+        # AI 가 잘못 알려준(카카오에 없는) 장소는 사용자에게 보여주기 전에 근처 실제 장소로 바꾼다
+        exclude = {i.place_url for p in plans for d in p.days for i in d.items if i.place_url}
+        # 조건에서 체크를 푼 음식 종류 + 메모에서 빼 달라고 한 음식 종류
+        avoid = list(dict.fromkeys([*req.spec.excluded_cuisines, *excluded_cuisines(reqs.rules)]))
+        found = await find_replacements(unverified_requests(plans), req.spec.region, exclude, avoid=avoid)
+        for p in plans:
+            for d in p.days:
+                for item in d.items:
+                    if item.id in found:
+                        apply_replacement(item, found[item.id])
+        # 사용자가 꼭 가겠다고 한 장소가 빠졌으면 그날·그 시간대 일정에 넣는다
+        ensure_must_visit(plans, requested)
+        # 점심·저녁 시간대에 식당이 없으면 근처 식당으로 채운다 (빼 달라고 한 음식 종류는 제외)
+        await fill_missing_meals(plans, req.spec.region, avoid=avoid, keep={core_name(c.name) for c in requested})
+        # AI 가 고른 식당이 빼 달라는 음식 종류면 다른 종류로 바꾼다
+        await replace_excluded_cuisines(
+            plans,
+            req.spec.region,
+            list(req.spec.excluded_cuisines),
+            rules=cuisine_rules(reqs.rules),
+            keep={core_name(c.name) for c in requested},
+        )
     inject_lodging(plans, req.spec)
+    # AI 가 이동 시간 한도를 어긴 구간은 앞 장소 근처의 같은 종류 장소로 바꾼다 (요청 장소는 그대로)
+    await enforce_travel_limits(plans, req.spec, keep={core_name(c.name) for c in requested})
+    # 동선: 걸어갈 수 있는 비슷한 곳이 있으면 그쪽으로, 식사 사이 장소는 가까운 순서로
+    await prefer_walkable(plans, req.spec, keep={core_name(c.name) for c in requested}, avoid=list(req.spec.excluded_cuisines))
+    optimize_order(plans)
+    # 상식 검사: 식후 밥 대용 카페 → 디저트 카페, 실외 제외 요청 반영, 도착·출발 시각 지키기
+    await common_sense_fixes(
+        plans, req.spec, wants_indoor(reqs.rules, req.spec.notes), keep={core_name(c.name) for c in requested}
+    )
+    # 카페·디저트가 식사 바로 앞에 있으면 식사 뒤로 옮긴다
+    move_cafes_after_meals(plans)
+    # 든든하게 먹은 직후 디저트 카페는 부담스러우니, 그 뒤 구경·활동을 카페 앞으로 당긴다
+    digest_before_dessert(plans)
+    # 장소를 바꾸면서 생긴 빈 시간은 앞 장소 체류를 늘려 메운다
+    close_gaps(plans, req.spec)
     if req.spec.transport == "자차":
         await attach_parking([i for p in plans for d in p.days for i in d.items])
 
@@ -373,6 +445,9 @@ async def generate_for_trip(trip_id: str, token: Token = None) -> TripPublic:
         state.plans = plans
         state.plan_source = source  # type: ignore[assignment]
         state.generated_at = now_iso()
+        # 새 일정이 오면 이전 확정·동의는 의미가 없어진다
+        state.confirmed_plan_id = state.confirmed_at = state.confirmed_by = None
+        state.confirm_votes = {}
         log(state, actor.nickname, "AI 여행 계획을 생성했어요", f"{req.spec.region} {req.spec.normalized().days}일")
 
     trip, _ = mutate(trip_id, token, run)
@@ -415,19 +490,11 @@ async def locate_trip_items(trip_id: str, token: Token = None) -> TripPublic:
     return to_public(trip)
 
 
-@app.post("/api/trips/{trip_id}/replace-unverified")
-async def replace_unverified(trip_id: str, token: Token = None) -> TripPublic:
-    """카카오에서 찾지 못한 장소를 앞뒤 일정 근처의 같은 종류 실제 장소로 바꾼다."""
-    if not settings.kakao_rest_api_key:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "카카오 REST API 키가 설정되지 않았어요.")
-    snapshot = get_trip_or_404(trip_id)
-    find_participant(snapshot, token)
-    if not snapshot.spec:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "먼저 여행 조건을 입력해 주세요.")
-
-    everywhere = [i for p in snapshot.plans for d in p.days for i in d.items if i.lat is not None]
+def unverified_requests(plans: list[PlanOption]) -> list[tuple[PlanItem, tuple[float, float]]]:
+    """카카오에서 못 찾은 장소마다 교체 후보를 찾을 기준 좌표를 정한다."""
+    everywhere = [i for p in plans for d in p.days for i in d.items if i.lat is not None]
     requests: list[tuple[PlanItem, tuple[float, float]]] = []
-    for plan in snapshot.plans:
+    for plan in plans:
         for day in plan.days:
             located = [(idx, i) for idx, i in enumerate(day.items) if i.lat is not None]
             for idx, item in enumerate(day.items):
@@ -442,6 +509,21 @@ async def replace_unverified(trip_id: str, token: Token = None) -> TripPublic:
                 else:
                     continue
                 requests.append((item, anchor))  # type: ignore[arg-type]
+    return requests
+
+
+@app.post("/api/trips/{trip_id}/replace-unverified")
+async def replace_unverified(trip_id: str, token: Token = None) -> TripPublic:
+    """카카오에서 찾지 못한 장소를 앞뒤 일정 근처의 같은 종류 실제 장소로 바꾼다."""
+    if not settings.kakao_rest_api_key:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "카카오 REST API 키가 설정되지 않았어요.")
+    snapshot = get_trip_or_404(trip_id)
+    find_participant(snapshot, token)
+    if not snapshot.spec:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "먼저 여행 조건을 입력해 주세요.")
+
+    everywhere = [i for p in snapshot.plans for d in p.days for i in d.items if i.lat is not None]
+    requests = unverified_requests(snapshot.plans)
     if not requests:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "바꿀 장소가 없어요. 먼저 '지도 위치 불러오기'를 해 주세요.")
 
@@ -573,6 +655,41 @@ def reorder_items(trip_id: str, plan_id: str, day_no: int, body: ReorderRequest,
 # ---------------------------------------------------------------------------
 # 투표 / 코멘트
 # ---------------------------------------------------------------------------
+
+
+def update_confirmation(trip: TripState) -> None:
+    """모든 참여자가 같은 안에 동의했으면 확정, 아니면 확정 해제"""
+    ids = {p.id for p in trip.participants}
+    trip.confirm_votes = {pid: plan for pid, plan in trip.confirm_votes.items() if pid in ids}
+    agreed = set(trip.confirm_votes.values())
+    if ids and len(trip.confirm_votes) == len(ids) and len(agreed) == 1:
+        plan_id = agreed.pop()
+        if trip.confirmed_plan_id != plan_id:
+            plan = next((p for p in trip.plans if p.id == plan_id), None)
+            trip.confirmed_plan_id, trip.confirmed_at, trip.confirmed_by = plan_id, now_iso(), "모두"
+            log(trip, "모두", "동의해서 일정을 확정했어요", f"{plan.label} · {plan.title}" if plan else "")
+    else:
+        trip.confirmed_plan_id = trip.confirmed_at = trip.confirmed_by = None
+
+
+@app.put("/api/trips/{trip_id}/confirm")
+def confirm_plan(trip_id: str, body: ConfirmRequest, token: Token = None) -> TripPublic:
+    """내 확정 동의를 남기거나(plan_id) 취소한다(None). 참여자 모두가 같은 안에 동의하면 확정된다."""
+
+    def run(trip: TripState, me: ParticipantRecord):
+        if body.plan_id is None:
+            if trip.confirm_votes.pop(me.id, None):
+                log(trip, me.nickname, "확정 동의를 취소했어요")
+        else:
+            plan = next((p for p in trip.plans if p.id == body.plan_id), None)
+            if not plan:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "확정할 일정을 찾을 수 없어요.")
+            trip.confirm_votes[me.id] = plan.id
+            log(trip, me.nickname, "확정에 동의했어요", f"{plan.label} · {plan.title}")
+        update_confirmation(trip)
+
+    trip, _ = mutate(trip_id, token, run)
+    return to_public(trip)
 
 
 @app.put("/api/trips/{trip_id}/items/{item_id}/vote")

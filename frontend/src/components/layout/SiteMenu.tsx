@@ -15,9 +15,16 @@ import { cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/explore", label: "둘러보기", icon: Compass, tone: "bg-lilac-100 text-lilac-700" },
-  { href: "/my", label: "내 여행", icon: MapIcon, tone: "bg-sky-100 text-sky-700" },
+  // 여행 방(/trip/...)도 내 여행에 속한다
+  { href: "/my", label: "내 여행", icon: MapIcon, tone: "bg-sky-100 text-sky-700", also: ["/trip"] },
   { href: "/bookmarks", label: "북마크", icon: BookmarkFilled, tone: "bg-butter-100 text-butter-700" },
 ];
+
+function isActive(pathname: string, href: string) {
+  const link = LINKS.find((l) => l.href === href);
+  const also = link && "also" in link ? (link.also ?? []) : [];
+  return [href, ...also].some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
 
 /** PC 헤더 가운데 메뉴 (둘러보기 · 내 여행 · 북마크) */
 export function SiteLinks() {
@@ -25,7 +32,7 @@ export function SiteLinks() {
   return (
     <div className="flex items-center gap-1 rounded-full bg-ink-100 p-1">
       {LINKS.map(({ href, label, icon: Icon }) => {
-        const active = pathname === href || pathname.startsWith(`${href}/`);
+        const active = isActive(pathname, href);
         return (
           <Link
             key={href}

@@ -11,8 +11,41 @@ export const THEMES = [
   "자연 경관",
   "역사 탐방",
   "야경/나이트라이프",
+  "실내 액티비티",
+  "체험/클래스",
+  "테마파크",
+  "바다/해변",
+  "등산/트레킹",
+  "스파/온천",
+  "공연/축제",
+  "사진 명소",
+  "로컬 시장",
+  "드라이브",
+  "아이와 함께",
+  "반려동물 동반",
 ] as const;
 export type Theme = (typeof THEMES)[number];
+
+/** 음식 종류 (카카오 음식점 분류와 같은 이름) */
+export const CUISINES = ["한식", "중식", "일식", "양식", "아시아음식", "분식", "패스트푸드", "치킨", "뷔페", "술집"] as const;
+export type Cuisine = (typeof CUISINES)[number];
+
+/** 꼭 갈 곳 시간대 ('' = 상관없음) */
+export const MUST_VISIT_SLOTS = ["", "오전", "점심", "오후", "저녁"] as const;
+export interface MustVisitPlace {
+  name: string;
+  address: string;
+  place_url: string;
+  lat: number | null;
+  lng: number | null;
+  /** 몇 일차 (null = 아무 날) */
+  day: number | null;
+  slot: (typeof MUST_VISIT_SLOTS)[number];
+}
+
+export const DRINKING = ["안 마셔요", "가볍게 한두 잔", "술자리 좋아요"] as const;
+export type Drinking = (typeof DRINKING)[number];
+export const DRINK_TYPES = ["소주", "맥주", "와인", "막걸리·전통주", "하이볼·칵테일", "위스키", "사케"] as const;
 
 export const AGE_GROUPS = ["영유아", "10대", "20대", "30대", "40대", "50대", "60대 이상"] as const;
 export type AgeGroup = (typeof AGE_GROUPS)[number];
@@ -77,8 +110,14 @@ export interface TripSpec {
   transport: "대중교통" | "자차" | "도보 위주" | "미정";
   /** 연속한 두 장소 사이 최대 이동 시간(분) */
   max_travel_minutes: number;
+  /** 대중교통 여행에서 걸어서 갈 수 있는 최대 시간(분) */
+  max_walk_minutes?: number;
   /** 이미 예약한 숙소들 (밤별로 지정, 1박 이상일 때 일정에 자동 반영) */
   lodgings: Lodging[];
+  /** 체크를 푼(빼 달라는) 음식 종류 */
+  excluded_cuisines?: Cuisine[];
+  /** 꼭 가야 하는 곳 */
+  must_visits?: MustVisitPlace[];
   notes: string;
 }
 
@@ -90,6 +129,10 @@ export interface Participant {
   preferred_tags: string[];
   joined_at: string;
   color: string;
+  drinking?: Drinking | null;
+  drink_types?: string[];
+  /** 취향을 직접 입력(또는 '없음' 확인)한 시각 */
+  prefs_saved_at?: string | null;
 }
 
 export interface PlaceBase {
@@ -188,6 +231,12 @@ export interface Trip {
   plan_source: "gemini" | "mock" | null;
   generated_at: string | null;
   activity: ActivityLog[];
+  /** 함께 확정한 안 (확정 전 null) */
+  confirmed_plan_id?: string | null;
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
+  /** 참여자별 확정 동의 (participant_id → plan_id) */
+  confirm_votes?: Record<string, string>;
 }
 
 export interface JoinResponse {

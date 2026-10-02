@@ -19,18 +19,13 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ChipGroup, ChipToggle } from "@/components/trip/chips";
 import { LodgingsField } from "@/components/trip/LodgingField";
+import { MustVisitField } from "@/components/trip/MustVisitField";
 import { THEME_STYLE } from "@/lib/styles";
-import { AGE_GROUPS, GENDER_MIX, THEMES, type TripSpec } from "@/lib/types";
+import { AGE_GROUPS, CUISINES, GENDER_MIX, MUST_VISIT_SLOTS, THEMES, type Theme, type TripSpec } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const TRAVEL_MINUTES = [10, 20, 30, 45, 60] as const;
-const TRANSPORT_LABEL: Record<string, string> = {
-  대중교통: "대중교통·도보",
-  자차: "자동차",
-  "도보 위주": "도보",
-  미정: "일반 이동",
-};
-
+const WALK_MINUTES = [5, 10, 15, 20, 30] as const;
 const DURATION_PRESETS = [
   { label: "당일치기", nights: 0 },
   { label: "1박 2일", nights: 1 },
@@ -62,8 +57,10 @@ const specSchema = z
     age_groups: z.array(z.enum(AGE_GROUPS)),
     themes: z.array(z.enum(THEMES)).min(1, "테마를 하나 이상 골라 주세요."),
     budget_level: z.enum(["알뜰", "보통", "여유"]),
+    excluded_cuisines: z.array(z.enum(CUISINES)),
     transport: z.enum(["대중교통", "자차", "도보 위주", "미정"]),
     max_travel_minutes: z.number().int().min(5).max(180),
+    max_walk_minutes: z.number().int().min(5).max(60),
     lodgings: z.array(
       z.object({
         name: z.string().min(1),
@@ -74,6 +71,17 @@ const specSchema = z
         check_in: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
         check_out: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
         nights: z.array(z.number().int().min(1)),
+      })
+    ),
+    must_visits: z.array(
+      z.object({
+        name: z.string().min(1),
+        address: z.string(),
+        place_url: z.string(),
+        lat: z.number().nullable(),
+        lng: z.number().nullable(),
+        day: z.number().int().min(1).nullable(),
+        slot: z.enum(MUST_VISIT_SLOTS),
       })
     ),
     notes: z.string().max(500),
@@ -107,9 +115,12 @@ export const DEFAULT_SPEC: TripSpec = {
   age_groups: [],
   themes: [],
   budget_level: "보통",
+  excluded_cuisines: [],
   transport: "미정",
   max_travel_minutes: 30,
+  max_walk_minutes: 15,
   lodgings: [],
+  must_visits: [],
   notes: "",
 };
 
@@ -167,6 +178,14 @@ function Field({
   );
 }
 
+/** 테마를 성격별로 묶어서 보여준다 (THEMES 의 모든 항목이 한 번씩 들어가야 함) */
+const THEME_GROUPS: { label: string; themes: Theme[] }[] = [
+  { label: "먹고 쉬기", themes: ["힐링", "맛집 투어", "카페 투어", "로컬 시장", "호캉스", "스파/온천"] },
+  { label: "몸으로 즐기기", themes: ["야외 액티비티", "실내 액티비티", "체험/클래스", "테마파크", "바다/해변", "등산/트레킹"] },
+  { label: "보고 즐기기", themes: ["자연 경관", "역사 탐방", "실내 문화/전시", "공연/축제", "사진 명소", "야경/나이트라이프", "쇼핑", "드라이브"] },
+  { label: "누구와 함께", themes: ["아이와 함께", "반려동물 동반"] },
+];
+
 export function TripSpecForm({
   initial,
   onSubmit,
@@ -178,7 +197,8 @@ export function TripSpecForm({
 }) {
   const form = useForm<SpecValues>({
     resolver: zodResolver(specSchema),
-    defaultValues: initial ?? DEFAULT_SPEC,
+    // 예전에 저장한 조건엔 새 항목(음식 종류·도보 시간)이 없을 수 있어 기본값과 합친다
+    defaultValues: initial ? { ...DEFAULT_SPEC, ...initial } : DEFAULT_SPEC,
   });
   const { control, register, watch, setValue, formState } = form;
   const mode = watch("duration_mode");
@@ -306,6 +326,22 @@ export function TripSpecForm({
             )}
           </Field>
 
+          <Field label="꼭 가야 하는 곳" hint="선택 · 날짜·시간대를 정하면 그때 일정에 꼭 넣어요">
+            <Controller
+              control={control}
+              name="must_visits"
+              render={({ field }) => (
+                <MustVisitField
+                  value={field.value ?? []}
+                  onChange={field.onChange}
+                  region={watch("region")}
+                  days={watch("days") || nights + 1}
+                  startDate={mode === "exact" ? startDate : null}
+                />
+              )}
+            />
+          </Field>
+
           {nights >= 1 && (
             <Field label="숙소" hint="선택 · 여러 곳 가능 · 예약했다면 일정에 체크인·체크아웃이 자동으로 들어가요">
               <Controller
@@ -382,34 +418,64 @@ export function TripSpecForm({
               control={control}
               name="themes"
               render={({ field }) => (
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
-                  {THEMES.map((theme) => {
-                    const { icon: Icon, soft } = THEME_STYLE[theme];
-                    const selected = field.value.includes(theme);
+                <div className="space-y-5">
+                  {THEME_GROUPS.map((group) => (
+                    <div key={group.label} className="space-y-2.5">
+                      <p className="text-xs font-semibold text-ink-500">{group.label}</p>
+                      <div className="flex flex-wrap gap-2">
+                        {group.themes.map((theme) => {
+                          const { icon: Icon, soft } = THEME_STYLE[theme];
+                          const selected = field.value.includes(theme);
+                          return (
+                            <button
+                              key={theme}
+                              type="button"
+                              aria-pressed={selected}
+                              onClick={() =>
+                                field.onChange(selected ? field.value.filter((t) => t !== theme) : [...field.value, theme])
+                              }
+                              className={cn(
+                                "inline-flex h-11 items-center gap-2 rounded-full border-2 pl-1.5 pr-4 text-sm font-semibold transition-all active:scale-[0.97]",
+                                selected ? "border-ink-900 bg-white" : "border-transparent bg-ink-50 hover:bg-ink-100"
+                              )}
+                            >
+                              <span className={cn("flex h-7 w-7 items-center justify-center rounded-full", soft)}>
+                                <Icon className="h-3.5 w-3.5" />
+                              </span>
+                              {theme}
+                              {selected && <Check className="h-3 w-3" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            />
+          </Field>
+
+          <Field label="먹고 싶은 음식 종류" hint="기본은 전부 · 체크를 풀면 그 음식은 빼고 추천해요">
+            <Controller
+              control={control}
+              name="excluded_cuisines"
+              render={({ field }) => (
+                <div className="flex flex-wrap gap-2">
+                  {CUISINES.map((c) => {
+                    const on = !field.value.includes(c);
                     return (
                       <button
-                        key={theme}
+                        key={c}
                         type="button"
-                        aria-pressed={selected}
-                        onClick={() =>
-                          field.onChange(selected ? field.value.filter((t) => t !== theme) : [...field.value, theme])
-                        }
+                        aria-pressed={on}
+                        onClick={() => field.onChange(on ? [...field.value, c] : field.value.filter((x) => x !== c))}
                         className={cn(
-                          "flex flex-col items-start gap-3 rounded-3xl border-2 p-4 text-left transition-all active:scale-[0.97]",
-                          selected ? "border-ink-900 bg-white" : "border-transparent bg-ink-50 hover:bg-ink-100"
+                          "inline-flex h-10 items-center gap-1.5 rounded-full border-2 px-4 text-sm font-semibold transition-all active:scale-[0.97]",
+                          on ? "border-ink-900 bg-white text-ink-900" : "border-transparent bg-ink-50 text-ink-400 line-through decoration-ink-300"
                         )}
                       >
-                        <span className={cn("flex h-10 w-10 items-center justify-center rounded-2xl", soft)}>
-                          <Icon className="h-[18px] w-[18px]" />
-                        </span>
-                        <span className="flex w-full items-center justify-between text-sm font-semibold">
-                          {theme}
-                          {selected && (
-                            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-ink-900 text-white">
-                              <Check className="h-2.5 w-2.5" />
-                            </span>
-                          )}
-                        </span>
+                        {on && <Check className="h-3 w-3" />}
+                        {c}
                       </button>
                     );
                   })}
@@ -443,9 +509,34 @@ export function TripSpecForm({
             </Field>
           </div>
 
+          {/* 대중교통·미정이면 걸어서 가는 구간과 타고 가는 구간의 한도를 따로 정한다 */}
+          {(watch("transport") === "대중교통" || watch("transport") === "미정") && (
+            <Field label="걸어서 이동은 최대" hint="이보다 멀면 대중교통으로 이동해요">
+              <Controller
+                control={control}
+                name="max_walk_minutes"
+                render={({ field }) => (
+                  <div className="flex flex-wrap gap-2">
+                    {WALK_MINUTES.map((m) => (
+                      <ChipToggle key={m} selected={field.value === m} onClick={() => field.onChange(m)}>
+                        도보 {m}분 이내
+                      </ChipToggle>
+                    ))}
+                  </div>
+                )}
+              />
+            </Field>
+          )}
+
           <Field
-            label="장소 간 최대 이동 시간"
-            hint={`${TRANSPORT_LABEL[watch("transport")]} 기준 · 이보다 먼 곳은 추천하지 않아요`}
+            label={
+              watch("transport") === "도보 위주"
+                ? "걸어서 이동은 최대"
+                : watch("transport") === "자차"
+                  ? "차로 이동은 최대"
+                  : "대중교통 이동은 최대"
+            }
+            hint="장소와 장소 사이 기준 · 이보다 먼 곳은 추천하지 않아요"
           >
             <Controller
               control={control}

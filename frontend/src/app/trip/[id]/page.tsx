@@ -31,7 +31,7 @@ import { Avatar, ShareButton } from "@/components/trip/people";
 import { TripHero } from "@/components/trip/TripHero";
 import { Toaster } from "@/components/trip/Toaster";
 import { TripSpecForm } from "@/components/trip/TripSpecForm";
-import { joinedLabel, TripSteps } from "@/components/trip/TripSteps";
+import { hasPrefs, joinedLabel, TripSteps } from "@/components/trip/TripSteps";
 import { api, ApiError } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { toast, useSessionStore, useTripStore } from "@/lib/store";
@@ -250,6 +250,15 @@ export default function TripPage() {
                       ...p.allergies.map((a) => ({ key: `a-${a}`, label: `알레르기 · ${a}`, tone: "bg-rose-50 text-rose-600" })),
                       ...p.dislikes.map((d) => ({ key: `d-${d}`, label: `기피 · ${d}`, tone: "bg-ink-100 text-ink-600" })),
                       ...p.preferred_tags.map((t) => ({ key: `t-${t}`, label: t, tone: "bg-mint-50 text-mint-700" })),
+                      ...(p.drinking
+                        ? [
+                            {
+                              key: "drink",
+                              label: `음주 · ${p.drinking}${p.drink_types?.length ? ` (${p.drink_types.join("·")})` : ""}`,
+                              tone: "bg-lilac-50 text-lilac-700",
+                            },
+                          ]
+                        : []),
                     ];
                     return (
                       <li
@@ -263,11 +272,26 @@ export default function TripPage() {
                               <span className="truncate">{p.nickname}</span>
                               {isMe && <span className="rounded-full bg-ink-900 px-1.5 py-0.5 text-[0.625rem] font-bold text-white">나</span>}
                             </p>
-                            <p className="text-xs text-ink-400">{timeAgo(p.joined_at)} 참여</p>
+                            <p className="flex items-center gap-1.5 text-xs text-ink-400">
+                              {timeAgo(p.joined_at)} 참여
+                              <span
+                                className={cn(
+                                  "rounded-md px-1.5 py-0.5 text-[0.6875rem] font-semibold",
+                                  hasPrefs(p) ? "bg-mint-50 text-mint-700" : "bg-butter-50 text-butter-700"
+                                )}
+                              >
+                                {hasPrefs(p) ? "취향 입력 완료" : "취향 입력 전"}
+                              </span>
+                            </p>
                           </div>
                           {isMe && (
-                            <Button variant="secondary" size="sm" className="rounded-full" onClick={() => setPrefsOpen(true)}>
-                              취향 수정
+                            <Button
+                              variant={hasPrefs(p) ? "secondary" : "default"}
+                              size="sm"
+                              className="rounded-full"
+                              onClick={() => setPrefsOpen(true)}
+                            >
+                              {hasPrefs(p) ? "취향 수정" : "취향 입력"}
                             </Button>
                           )}
                         </div>
@@ -279,7 +303,7 @@ export default function TripPage() {
                               </span>
                             ))
                           ) : (
-                            <span className="text-xs text-ink-400">{isMe ? "취향을 남기면 일정에 반영돼요" : "아직 남긴 취향이 없어요"}</span>
+                            <span className="text-xs text-ink-400">{isMe ? "알레르기·못 먹는 음식·좋아하는 것을 남기면 일정에 반영돼요" : hasPrefs(p) ? "특별히 가리는 건 없어요" : "아직 취향을 입력하지 않았어요"}</span>
                           )}
                         </div>
                       </li>

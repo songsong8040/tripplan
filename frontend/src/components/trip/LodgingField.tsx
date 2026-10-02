@@ -13,15 +13,17 @@ import type { Lodging, PlaceSearchResult } from "@/lib/types";
 
 type PickedPlace = Pick<Lodging, "name" | "address" | "place_url" | "lat" | "lng">;
 
-/** 숙소 이름으로 카카오 검색 → 선택, 결과가 없으면 이름만 직접 입력 */
-function LodgingSearch({
+/** 장소 이름으로 카카오 검색 → 선택, 결과가 없으면 이름만 직접 입력 (숙소·꼭 갈 곳에서 같이 씀) */
+export function PlaceSearch({
   region,
   onPick,
   onCancel,
+  placeholder = "숙소 이름으로 검색 (예: 리버파크호텔)",
 }: {
   region: string;
   onPick: (place: PickedPlace) => void;
   onCancel?: () => void;
+  placeholder?: string;
 }) {
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState<PlaceSearchResult[]>([]);
@@ -56,7 +58,7 @@ function LodgingSearch({
         <Input
           autoFocus
           className="pl-11 pr-10"
-          placeholder="숙소 이름으로 검색 (예: 리버파크호텔)"
+          placeholder={placeholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -156,7 +158,7 @@ export function LodgingsField({
       {value.map((lodging, idx) => (
         <div key={idx} className="space-y-3 rounded-2xl border bg-card p-4">
           {editingIdx === idx ? (
-            <LodgingSearch
+            <PlaceSearch
               region={region}
               onPick={(place) => {
                 update(idx, place);
@@ -219,7 +221,7 @@ export function LodgingsField({
       ))}
 
       {adding ? (
-        <LodgingSearch region={region} onPick={add} onCancel={() => setAdding(false)} />
+        <PlaceSearch region={region} onPick={add} onCancel={() => setAdding(false)} />
       ) : (
         <Button type="button" variant="outline" size="sm" onClick={() => setAdding(true)}>
           <Plus /> {value.length ? "숙소 추가" : "예약한 숙소 추가"}

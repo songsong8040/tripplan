@@ -1,4 +1,5 @@
 import type {
+  Drinking,
   ItemPatch,
   JoinResponse,
   Participant,
@@ -64,6 +65,15 @@ async function request<T>(path: string, init: RequestInit & { token?: string | n
 
 const json = (body: unknown) => JSON.stringify(body);
 
+/** 참여자 취향 (음식 + 음주) */
+export interface PreferencesBody {
+  allergies: string[];
+  dislikes: string[];
+  preferred_tags: string[];
+  drinking: Drinking | null;
+  drink_types: string[];
+}
+
 export const api = {
   health: () => request<{ ok: boolean; gemini: boolean; kakao: boolean; model: string }>("/health"),
   route: (legs: { mode: "car" | "walk"; start: { lat: number; lng: number }; end: { lat: number; lng: number } }[]) =>
@@ -79,13 +89,13 @@ export const api = {
 
   join: (
     id: string,
-    body: { nickname: string; pin: string; allergies: string[]; dislikes: string[]; preferred_tags: string[] }
+    body: { nickname: string; pin: string } & PreferencesBody
   ) => request<JoinResponse>(`/trips/${id}/join`, { method: "POST", body: json(body) }),
   me: (id: string, token: string) => request<Participant>(`/trips/${id}/me`, { token }),
   updatePreferences: (
     id: string,
     token: string,
-    body: { allergies: string[]; dislikes: string[]; preferred_tags: string[] }
+    body: PreferencesBody
   ) => request<Trip>(`/trips/${id}/me/preferences`, { method: "PUT", token, body: json(body) }),
 
   updateSpec: (id: string, token: string, spec: TripSpec) =>
@@ -110,6 +120,9 @@ export const api = {
       body: json({ item_ids: itemIds }),
     }),
 
+  /** 일정 확정 (planId=null 이면 확정 취소) */
+  confirmPlan: (id: string, token: string, planId: string | null) =>
+    request<Trip>(`/trips/${id}/confirm`, { method: "PUT", token, body: json({ plan_id: planId }) }),
   vote: (id: string, token: string, itemId: string, value: VoteValue | null) =>
     request<Trip>(`/trips/${id}/items/${itemId}/vote`, { method: "PUT", token, body: json({ value }) }),
   addComment: (id: string, token: string, itemId: string, text: string, parentId?: string) =>

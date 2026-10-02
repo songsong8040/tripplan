@@ -7,6 +7,18 @@ import { FontAwesomeIcon, type FontAwesomeIconProps } from "@fortawesome/react-f
 import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import {
   faArrowLeft,
+  faBowlingBall,
+  faHammer,
+  faTicket,
+  faUmbrellaBeach,
+  faPersonHiking,
+  faHotTubPerson,
+  faMasksTheater,
+  faCameraRetro,
+  faStore,
+  faRoad,
+  faChildren,
+  faPaw,
   faArrowRight,
   faArrowRightFromBracket,
   faArrowUpRightFromSquare,
@@ -106,6 +118,18 @@ export const AlarmClockOff = make(faMugHot, "AlarmClockOff");
 export const AlertCircle = make(faCircleExclamation, "AlertCircle");
 export const AlertTriangle = make(faTriangleExclamation, "AlertTriangle");
 export const ArrowLeft = make(faArrowLeft, "ArrowLeft");
+export const IndoorPlay = make(faBowlingBall, "IndoorPlay");
+export const Workshop = make(faHammer, "Workshop");
+export const ThemePark = make(faTicket, "ThemePark");
+export const Beach = make(faUmbrellaBeach, "Beach");
+export const Hiking = make(faPersonHiking, "Hiking");
+export const Spa = make(faHotTubPerson, "Spa");
+export const Show = make(faMasksTheater, "Show");
+export const PhotoSpot = make(faCameraRetro, "PhotoSpot");
+export const Market = make(faStore, "Market");
+export const Drive = make(faRoad, "Drive");
+export const Kids = make(faChildren, "Kids");
+export const Pet = make(faPaw, "Pet");
 export const ArrowRight = make(faArrowRight, "ArrowRight");
 export const BadgeCheck = make(faCircleCheck, "BadgeCheck");
 export const Bookmark = make(faBookmark, "Bookmark");

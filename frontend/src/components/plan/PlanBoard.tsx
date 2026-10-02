@@ -3,6 +3,7 @@
 import * as React from "react";
 import {
   AlertTriangle,
+  Check,
   FileSpreadsheet,
   LayoutList,
   Loader2,
@@ -28,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { DaySection } from "@/components/plan/DaySection";
+import { Avatar } from "@/components/trip/people";
 import { MapPanel } from "@/components/plan/MapPanel";
 import { ItemDialog, type ItemFormValues } from "@/components/plan/ItemDialog";
 import { SlideView } from "@/components/plan/SlideView";
@@ -35,7 +37,7 @@ import { api } from "@/lib/api";
 import { downloadTripXlsx } from "@/lib/exportXlsx";
 import { dayColor } from "@/lib/route";
 import { dayLabel, timeAgo } from "@/lib/format";
-import { toast, useTripStore } from "@/lib/store";
+import { toast, useSessionStore, useTripStore } from "@/lib/store";
 import type { DayPlan, PlanItem, PlanOption, Trip } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -227,6 +229,87 @@ function DayChips({
   );
 }
 
+/** 일정 확정: 참여자 모두가 같은 안에 '확정 동의'를 눌러야 확정된다 */
+function ConfirmBar({ trip, plan }: { trip: Trip; plan: PlanOption }) {
+  const mutate = useTripStore((s) => s.mutate);
+  const myId = useSessionStore((s) => s.sessions[trip.id]?.participantId);
+  const [busy, setBusy] = React.useState(false);
+  const votes = trip.confirm_votes ?? {};
+  const confirmed = trip.plans.find((p) => p.id === trip.confirmed_plan_id);
+  const agreedHere = trip.participants.filter((p) => votes[p.id] === plan.id);
+  const myVote = myId ? votes[myId] : undefined;
+
+  const run = async (planId: string | null, message: string) => {
+    setBusy(true);
+    await mutate((token) => api.confirmPlan(trip.id, token, planId), message);
+    setBusy(false);
+  };
+
+  // 누가 이 안에 동의했는지: 동의한 사람은 진하게 + 체크
+  const people = (
+    <div className="flex -space-x-1.5">
+      {trip.participants.map((p) => {
+        const ok = votes[p.id] === plan.id;
+        return (
+          <span key={p.id} className="relative" title={`${p.nickname} · ${ok ? "동의" : "아직"}`}>
+            <Avatar person={p} size="sm" className={cn(!ok && "opacity-35 grayscale")} />
+            {ok && (
+              <span className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-mint-500 text-white ring-2 ring-white">
+                <Check className="h-1.5 w-1.5" />
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+
+  if (confirmed && confirmed.id === plan.id)
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-[1.25rem] bg-mint-50 px-4 py-3 ring-1 ring-inset ring-mint-100">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-mint-500 text-white">
+          <Check className="h-3.5 w-3.5" />
+        </span>
+        <p className="min-w-0 flex-1 text-sm">
+          모두 동의해서 <b>{confirmed.label}</b>으로 확정했어요
+          {trip.confirmed_at && <span className="text-ink-500"> · {timeAgo(trip.confirmed_at)}</span>}
+        </p>
+        {people}
+        {myVote === plan.id && (
+          <Button size="sm" variant="ghost" className="rounded-full" disabled={busy} onClick={() => run(null, "확정 동의를 취소했어요")}>
+            동의 취소
+          </Button>
+        )}
+      </div>
+    );
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-[1.25rem] bg-ink-50 px-4 py-3">
+      <div className="min-w-0 flex-1 space-y-0.5">
+        <p className="text-sm font-semibold">
+          {plan.label} 확정 동의 {agreedHere.length}/{trip.participants.length}명
+        </p>
+        <p className="text-xs text-ink-500">
+          {confirmed
+            ? `지금은 ${confirmed.label}으로 확정돼 있어요. 모두 ${plan.label}에 동의하면 바뀌어요.`
+            : "모두가 같은 안에 동의하면 일정이 확정돼요."}
+        </p>
+      </div>
+      {people}
+      {myVote === plan.id ? (
+        <Button size="sm" variant="secondary" className="rounded-full" disabled={busy} onClick={() => run(null, "확정 동의를 취소했어요")}>
+          동의 취소
+        </Button>
+      ) : (
+        <Button size="sm" className="rounded-full" disabled={busy || !myId} onClick={() => run(plan.id, `${plan.label} 확정에 동의했어요`)}>
+          {busy ? <Loader2 className="animate-spin" /> : <Check />}
+          {myVote ? `${plan.label}으로 동의 바꾸기` : `${plan.label} 확정에 동의`}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export function PlanBoard({
   trip,
   onRegenerate,
@@ -366,13 +449,24 @@ export function PlanBoard({
                 {p.label}
               </span>
               <span className="min-w-0 flex-1">
-                <span className={cn("block truncate font-bold", !on && "text-ink-600")}>{p.title}</span>
+                <span className={cn("flex items-center gap-1.5 font-bold", !on && "text-ink-600")}>
+                  <span className="truncate">{p.title}</span>
+                  {p.id === trip.confirmed_plan_id && (
+                    <span className="shrink-0 rounded-md bg-mint-100 px-1.5 py-0.5 text-[0.6875rem] font-bold text-mint-700">확정</span>
+                  )}
+                </span>
                 {p.concept && <span className="mt-0.5 block truncate text-xs text-ink-500">{p.concept}</span>}
               </span>
             </button>
           );
         })}
       </div>
+
+      {activePlan && (
+        <div className={cn(mobileView === "map" && "hidden lg:block")}>
+          <ConfirmBar trip={trip} plan={activePlan} />
+        </div>
+      )}
 
       <UnverifiedNotice trip={trip} onRegenerate={() => setConfirmRegen(true)} />
 
