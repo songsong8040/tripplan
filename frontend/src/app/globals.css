@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* 화이트 바탕 + 블랙 포인트 */
+    --background: 0 0% 100%;
+    --foreground: 216 23% 13%;
+    --card: 0 0% 100%;
+    --card-foreground: 216 23% 13%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 216 23% 13%;
+    --primary: 216 23% 13%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 17% 96%;
+    --secondary-foreground: 216 23% 13%;
+    --muted: 210 17% 96%;
+    --muted-foreground: 213 10% 47%;
+    /* 은은한 파스텔 라일락 (선택·강조 배경) */
+    --accent: 254 100% 97%;
+    --accent-foreground: 256 35% 38%;
+    --destructive: 343 70% 52%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 210 11% 91%;
+    --input: 210 11% 91%;
+    --ring: 216 23% 13%;
+    --radius: 0.875rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scrollbar-color: hsl(213 13% 81%) transparent;
+    scrollbar-width: thin;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 9999px;
+    background-color: hsl(213 13% 81%);
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(213 10% 63%);
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    letter-spacing: -0.01em;
+    word-break: keep-all;
+  }
+}
+
+/* 로딩 점: 회색 점이 순서대로 통통 튀어 오르고, 올라간 순간만 검은색 */
+@keyframes dot-bounce {
+  0%, 50%, 100% {
+    transform: translateY(0);
+    background-color: #d1d6db;
+  }
+  25% {
+    transform: translateY(-9px);
+    background-color: #191f28;
+  }
+}
+.dot-bounce {
+  animation: dot-bounce 1.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+.dot-bounce:nth-child(2) { animation-delay: 0.15s; }
+.dot-bounce:nth-child(3) { animation-delay: 0.3s; }
+.dot-bounce:nth-child(4) { animation-delay: 0.45s; }
+
+/* 여행지 동그라미: 배경은 연회색 그대로, 선택·호버 때 국내(코랄)/해외(블루·퍼플) 그라데이션 테두리 + 바깥 빛 */
+.region-pill {
+  border: 1.5px solid transparent;
+  background: linear-gradient(#f9fafb, #f9fafb) padding-box, linear-gradient(transparent, transparent) border-box;
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+.region-pill[data-area="domestic"]:hover,
+.region-pill[data-area="domestic"][data-active] {
+  background: linear-gradient(#f9fafb, #f9fafb) padding-box, linear-gradient(to bottom, #ffad8b, #fb7096) border-box;
+  box-shadow: 0 6px 18px -6px rgb(251 112 150 / 0.45);
+}
+.region-pill[data-area="overseas"]:hover,
+.region-pill[data-area="overseas"][data-active] {
+  background: linear-gradient(#f9fafb, #f9fafb) padding-box, linear-gradient(to bottom, #60aaf7, #a688f8) border-box;
+  box-shadow: 0 6px 18px -6px rgb(139 102 238 / 0.45);
+}
+.region-pill[data-active] {
+  box-shadow: 0 8px 24px -6px rgb(251 112 150 / 0.6);
+}
+.region-pill[data-area="overseas"][data-active] {
+  box-shadow: 0 8px 24px -6px rgb(139 102 238 / 0.6);
+}
